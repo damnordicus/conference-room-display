@@ -1,8 +1,8 @@
 import os
 import json
 import requests
-from datetime import datetime, timedelta
-from flask import Flask, render_template_string, jsonify
+from datetime import datetime, timedelta, timezone
+from flask import Flask, render_template, jsonify
 import threading
 import time
 from msal import ConfidentialClientApplication
@@ -15,7 +15,7 @@ CONFIG = {
     'client_secret': '', 
     'tenant_id': '',
     'booking_business_id': 'PhoenixSparkUpperConferenceRoom@TravisSpark.onmicrosoft.com',
-    'google_sites_url': 'https://www.travisspark.com',  # Optional fallback
+    'google_sites_url': 'http://www.google.com',  # Optional fallback
     'refresh_interval': 300  # 5 minutes
 }
 
@@ -95,9 +95,16 @@ def parse_graph_datetime(datetime_str):
 
 def get_today_range():
     """Get today's date range in local timezone"""
-    today = datetime.now().astimezone()
-    start_date = today.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Use timezone-aware datetime for consistent comparison
+    from datetime import timezone
+    
+    # Get current time in your local timezone (you may want to specify your actual timezone)
+    now = datetime.now().astimezone()
+    
+    # Get start and end of today in local timezone
+    start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end_date = start_date + timedelta(days=1)
+    
     return start_date, end_date
 
 def compare_datetimes_safely(dt1, dt2, operation='lt'):
@@ -143,23 +150,23 @@ def fetch_bookings():
             return
     
     try:
-        # Get today's date range
-        today = datetime.now()
-        start_date = today.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_date = start_date + timedelta(days=1)
+        # Get today's date range in local timezone
+        start_date, end_date = get_today_range()
+        
+        # Convert to UTC for the API call
+        start_date_utc = start_date.astimezone(timezone.utc)
+        end_date_utc = end_date.astimezone(timezone.utc)
         
         # Format dates for API (ISO 8601 format)
-        start_str = start_date.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-        end_str = end_date.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        start_str = start_date_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        end_str = end_date_utc.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         
         # Use calendarView endpoint for date range filtering
         url = f"https://graph.microsoft.com/v1.0/solutions/bookingBusinesses/{CONFIG['booking_business_id']}/calendarView"
-        
         headers = {
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json'
         }
-        
         params = {
             'startDateTime': start_str,
             'endDateTime': end_str,
@@ -167,12 +174,28 @@ def fetch_bookings():
         }
         
         print(f"Fetching bookings from {start_str} to {end_str}")
+        print(f"Local time range: {start_date} to {end_date}")
         
         response = requests.get(url, headers=headers, params=params)
-        
+
         if response.status_code == 200:
             appointments = response.json().get('value', [])
             print(f"Found {len(appointments)} appointments")
+            
+            # Debug: Print appointment details
+            for apt in appointments:
+                start_dt = apt.get('startDateTime', {})
+                if isinstance(start_dt, dict):
+                    start_time_str = start_dt.get('dateTime', '')
+                    print(f"Appointment: {start_time_str}")
+                    if start_time_str:
+                        parsed_time = parse_graph_datetime(start_time_str)
+                        if parsed_time:
+                            local_time = parsed_time.astimezone()
+                            print(f"  UTC: {parsed_time}")
+                            print(f"  Local: {local_time}")
+                            print(f"  Date: {local_time.date()}")
+                            print(f"  Today: {start_date.date()}")
             
             # Find next upcoming appointment
             now = datetime.now().astimezone()  # Make timezone-aware
@@ -188,7 +211,7 @@ def fetch_bookings():
                     start_time_str = start_datetime.get('dateTime', '')
                 else:
                     start_time_str = start_datetime
-                
+                    
                 if isinstance(end_datetime, dict):
                     end_time_str = end_datetime.get('dateTime', '')
                 else:
@@ -209,6 +232,11 @@ def fetch_bookings():
                     start_local = start_time.astimezone()
                     end_local = end_time.astimezone()
                     
+                    # Additional check: ensure this appointment is actually today
+                    if start_local.date() != now.date():
+                        print(f"Skipping appointment not for today: {start_local.date()} != {now.date()}")
+                        continue
+                    
                     # Get appointment details
                     customer_name = appointment.get('customerName', 'Unknown Customer')
                     service_name = appointment.get('serviceName', 'Booking')
@@ -220,6 +248,7 @@ def fetch_bookings():
                             'title': title,
                             'start': start_local.strftime('%I:%M %p'),
                             'end': end_local.strftime('%I:%M %p'),
+                            'date': start_local.strftime('%B %d, %Y'),
                             'duration': str(end_local - start_local),
                             'is_current': False
                         }
@@ -230,11 +259,11 @@ def fetch_bookings():
                             'title': title,
                             'start': start_local.strftime('%I:%M %p'),
                             'end': end_local.strftime('%I:%M %p'),
+                            'date': start_local.strftime('%B %d, %Y'),
                             'duration': str(end_local - start_local),
                             'is_current': True
                         }
                         break
-                        
                 except Exception as e:
                     print(f"Error parsing appointment time: {e}")
                     continue
@@ -244,16 +273,15 @@ def fetch_bookings():
             
             if next_appointment:
                 status = "Current" if next_appointment['is_current'] else "Next"
-                print(f"{status} booking: {next_appointment['title']} at {next_appointment['start']}")
+                print(f"{status} booking: {next_appointment['title']} at {next_appointment['start']} on {next_appointment['date']}")
             else:
-                print("No upcoming bookings found")
+                print("No upcoming bookings found for today")
                 
         elif response.status_code == 404:
             print("Booking business not found or calendarView not supported")
             # Fallback to original appointments endpoint
             print("Trying fallback to appointments endpoint...")
             fetch_bookings_fallback()
-            
         else:
             print(f"API Error: {response.status_code} - {response.text}")
             
@@ -267,12 +295,10 @@ def fetch_bookings_fallback():
     try:
         # Use appointments endpoint without server-side filtering
         url = f"https://graph.microsoft.com/v1.0/solutions/bookingBusinesses/{CONFIG['booking_business_id']}/appointments"
-        
         headers = {
             'Authorization': f'Bearer {access_token}',
             'Content-Type': 'application/json'
         }
-        
         params = {
             '$orderby': 'startDateTime/dateTime'
         }
@@ -294,14 +320,18 @@ def fetch_bookings_fallback():
                     start_time_str = start_datetime.get('dateTime', '')
                 else:
                     start_time_str = start_datetime
-                
+                    
                 if start_time_str:
                     try:
                         start_dt = parse_graph_datetime(start_time_str)
                         if start_dt:
                             start_dt_local = start_dt.astimezone()
-                            if compare_datetimes_safely(start_date, start_dt_local, 'le') and compare_datetimes_safely(start_dt_local, end_date, 'lt'):
+                            # Check if appointment is today
+                            if start_dt_local.date() == start_date.date():
                                 appointments.append(appointment)
+                                print(f"Including appointment: {start_time_str} -> {start_dt_local}")
+                            else:
+                                print(f"Excluding appointment not for today: {start_time_str} -> {start_dt_local}")
                     except Exception as e:
                         print(f"Error filtering appointment: {e}")
                         continue
@@ -320,7 +350,7 @@ def fetch_bookings_fallback():
                     start_time_str = start_datetime.get('dateTime', '')
                 else:
                     start_time_str = start_datetime
-                
+                    
                 if isinstance(end_datetime, dict):
                     end_time_str = end_datetime.get('dateTime', '')
                 else:
@@ -349,6 +379,7 @@ def fetch_bookings_fallback():
                             'title': title,
                             'start': start_local.strftime('%I:%M %p'),
                             'end': end_local.strftime('%I:%M %p'),
+                            'date': start_local.strftime('%B %d, %Y'),
                             'duration': str(end_local - start_local),
                             'is_current': False
                         }
@@ -358,11 +389,11 @@ def fetch_bookings_fallback():
                             'title': title,
                             'start': start_local.strftime('%I:%M %p'),
                             'end': end_local.strftime('%I:%M %p'),
+                            'date': start_local.strftime('%B %d, %Y'),
                             'duration': str(end_local - start_local),
                             'is_current': True
                         }
                         break
-                        
                 except Exception as e:
                     print(f"Error parsing appointment time: {e}")
                     continue
@@ -372,9 +403,9 @@ def fetch_bookings_fallback():
             
             if next_appointment:
                 status = "Current" if next_appointment['is_current'] else "Next"
-                print(f"{status} booking: {next_appointment['title']} at {next_appointment['start']}")
+                print(f"{status} booking: {next_appointment['title']} at {next_appointment['start']} on {next_appointment['date']}")
             else:
-                print("No upcoming bookings found")
+                print("No upcoming bookings found for today")
                 
         else:
             print(f"Fallback API Error: {response.status_code} - {response.text}")
@@ -388,144 +419,10 @@ def update_bookings_loop():
         fetch_bookings()
         time.sleep(CONFIG['refresh_interval'])
 
-# HTML Templates
-GENERIC_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Conference Room</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-        }
-        .container {
-            text-align: center;
-            max-width: 800px;
-            padding: 40px;
-        }
-        h1 {
-            font-size: 3em;
-            margin-bottom: 20px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        }
-        .status {
-            font-size: 1.5em;
-            margin-bottom: 30px;
-            opacity: 0.9;
-        }
-        .booking-info {
-            background: rgba(255,255,255,0.1);
-            padding: 30px;
-            border-radius: 15px;
-            margin-top: 30px;
-            backdrop-filter: blur(10px);
-        }
-        .booking-title {
-            font-size: 2em;
-            margin-bottom: 15px;
-            color: #fff;
-        }
-        .booking-time {
-            font-size: 1.3em;
-            opacity: 0.9;
-        }
-        .current-booking {
-            background: rgba(255,107,107,0.2);
-            border: 2px solid rgba(255,107,107,0.5);
-        }
-        .next-booking {
-            background: rgba(107,255,107,0.2);
-            border: 2px solid rgba(107,255,107,0.5);
-        }
-        .last-updated {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            font-size: 0.9em;
-            opacity: 0.7;
-        }
-        .controls {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: rgba(0,0,0,0.3);
-            padding: 10px;
-            border-radius: 10px;
-        }
-        .controls a {
-            color: white;
-            text-decoration: none;
-            margin: 0 10px;
-            padding: 5px 10px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 5px;
-        }
-        .controls a:hover {
-            background: rgba(255,255,255,0.3);
-        }
-    </style>
-    <script>
-        // Auto-refresh every 5 minutes
-        setTimeout(() => {
-            location.reload();
-        }, 300000);
-    </script>
-</head>
-<body>
-    <div class="controls">
-        <a href="/google-sites">Google Sites</a>
-        <a href="/refresh">Refresh</a>
-    </div>
-    
-    <div class="container">
-        <h1>Conference Room</h1>
-        
-        {% if booking %}
-            <div class="booking-info {% if booking.is_current %}current-booking{% else %}next-booking{% endif %}">
-                <div class="booking-title">{{ booking.title }}</div>
-                <div class="booking-date">
-                    Date: {{ booking.start }}
-                </div>
-                <div class="booking-time">
-                    {% if booking.is_current %}
-                        <strong>Currently in session</strong><br>
-                        Started: {{ booking.start }} | Ends: {{ booking.end }}
-                    {% else %}
-                        <strong>Next booking</strong><br>
-                        Time: {{ booking.start }} - {{ booking.end }}
-                    {% endif %}
-                </div>
-            </div>
-        {% else %}
-            <div class="status">
-                <p>🟢 Room Available</p>
-                <p>No upcoming bookings</p>
-            </div>
-        {% endif %}
-    </div>
-    
-    {% if last_updated %}
-    <div class="last-updated">
-        Last updated: {{ last_updated.strftime('%I:%M %p') }}
-    </div>
-    {% endif %}
-</body>
-</html>
-"""
-
 @app.route('/')
 def index():
     """Main display page"""
-    return render_template_string(GENERIC_TEMPLATE, 
+    return render_template('conference_room.html', 
                                 booking=current_booking, 
                                 last_updated=last_updated)
 
