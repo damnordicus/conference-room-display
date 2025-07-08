@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Conference Room</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        .container {
+            text-align: center;
+            max-width: 800px;
+            padding: 40px;
+        }
+        h1 {
+            font-size: 3em;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .status {
+            font-size: 1.5em;
+            margin-bottom: 30px;
+            opacity: 0.9;
+        }
+        .booking-info {
+            background: rgba(255,255,255,0.1);
+            padding: 30px;
+            border-radius: 15px;
+            margin-top: 30px;
+            backdrop-filter: blur(10px);
+        }
+        .booking-title {
+            font-size: 2em;
+            margin-bottom: 15px;
+            color: #fff;
+        }
+        .booking-date {
+            font-size: 1.2em;
+            margin-bottom: 10px;
+            opacity: 0.8;
+        }
+        .booking-time {
+            font-size: 1.3em;
+            opacity: 0.9;
+        }
+        .current-booking {
+            background: rgba(255,107,107,0.2);
+            border: 2px solid rgba(255,107,107,0.5);
+        }
+        .next-booking {
+            background: rgba(107,255,107,0.2);
+            border: 2px solid rgba(107,255,107,0.5);
+        }
+        .last-updated {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            font-size: 0.9em;
+            opacity: 0.7;
+        }
+        .controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 10px;
+        }
+        .controls a {
+            color: white;
+            text-decoration: none;
+            margin: 0 10px;
+            padding: 5px 10px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 5px;
+        }
+        .controls a:hover {
+            background: rgba(255,255,255,0.3);
+        }
+    </style>
+    <script>
+        // Auto-refresh every 5 minutes
+        setTimeout(() => {
+            location.reload();
+        }, 300000);
+    </script>
+</head>
+<body>
+    <div class="controls">
+        <a href="/google-sites">Google Sites</a>
+        <a href="/refresh">Refresh</a>
+    </div>
+    <div class="container">
+        <h1>Conference Room</h1>
+        {% if booking %}
+            <div class="booking-info {% if booking.is_current %}current-booking{% else %}next-booking{% endif %}">
+                <div class="booking-title">{{ booking.title }}</div>
+                <div class="booking-date">
+                    Date: {{ booking.date }}
+                </div>
+                <div class="booking-time">
+                    {% if booking.is_current %}
+                        <strong>Currently in session</strong><br>
+                        Started: {{ booking.start }} | Ends: {{ booking.end }}
+                    {% else %}
+                        <strong>Next booking</strong><br>
+                        Time: {{ booking.start }} - {{ booking.end }}
+                    {% endif %}
+                </div>
+            </div>
+        {% else %}
+            <div class="status">
+                <p>🟢 Room Available</p>
+                <p>No upcoming bookings</p>
+            </div>
+        {% endif %}
+    </div>
+
+    {% if last_updated %}
+    <div class="last-updated">
+        Last updated: {{ last_updated.strftime('%I:%M %p') }}
+    </div>
+    {% endif %}
+</body>
+</html>
